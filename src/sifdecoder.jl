@@ -90,7 +90,7 @@ function sifdecoder(
       output_str = read(outlog, String)
       println(output_str)
     end
-    isfile("OUTSDIF.d") && run(`mv OUTSDIF.d $outsdif`)
+    isfile("OUTSDIF.d") && mv("OUTSDIF.d", outsdif, force = true)
   end
   rm(outlog)
   rm(errlog)
@@ -128,7 +128,8 @@ function build_libsif(
   end
 
   pname, sif = basename(name) |> splitext
-  libsif = "lib$(pname)_$(precision)"
+  libsif_name = "lib$(pname)_$(precision)"
+  libsif = C_NULL
 
   cd(libsif_folder) do
     if isfile("ELFUN$suffix.f")
@@ -142,34 +143,40 @@ function build_libsif(
         end
       end
       if Sys.isapple()
-        libcutest = joinpath(libpath, "lib$library.$dlext")
-        run(`gfortran -dynamiclib -o $libsif.$dlext $(object_files) -Wl,-rpath,$libpath $libcutest`)
+        if VERSION < v"1.10"
+          libcutest = joinpath(libpath, "lib$library.$dlext")
+          run(`gfortran -dynamiclib -o $(libsif_name).$dlext $(object_files) -Wl,-rpath,$libpath $libcutest`)
+        else
+          libcutest = joinpath(libpath, "lib$library.a")
+          run(`gfortran -dynamiclib -o $(libsif_name).$dlext $(object_files) -Wl,-all_load $libcutest`)
+        end
       elseif Sys.iswindows()
         @static if Sys.iswindows()
           mingw = Int == Int64 ? "mingw64" : "mingw32"
           gfortran = joinpath(artifact"mingw-w64", mingw, "bin", "gfortran.exe")
           libcutest = joinpath(libpath, "lib$library.a")
           run(
-            `$gfortran -shared -o $libsif.$dlext $(object_files) -Wl,--whole-archive $libcutest -Wl,--no-whole-archive`,
+            `$gfortran -shared -o $(libsif_name).$dlext $(object_files) -Wl,--whole-archive $libcutest -Wl,--no-whole-archive`,
           )
         end
       else
-        libgfortran = strip(read(`gfortran --print-file libgfortran.so`, String))
-        run(
-          `ld -shared -o $libsif.$dlext $(object_files) -rpath=$libpath -L$libpath -l$library $libgfortran`,
-        )
+        if VERSION < v"1.10"
+          libgfortran = strip(read(`gfortran --print-file libgfortran.so`, String))
+          run(
+            `ld -shared -o $(libsif_name).$dlext $(object_files) -rpath=$libpath -L$libpath -l$library $libgfortran`,
+          )
+        else
+          libcutest = joinpath(libpath, "lib$library.a")
+          run(
+            `gfortran -shared -o $(libsif_name).$dlext $(object_files) -Wl,--whole-archive $libcutest -Wl,--no-whole-archive`,
+          )
+        end
       end
       delete_temp_files(suffix)
-      cutest_lib = Libdl.dlopen(libsif, Libdl.RTLD_NOW | Libdl.RTLD_DEEPBIND | Libdl.RTLD_GLOBAL)
-      if precision == :single
-        global cutest_lib_single = cutest_lib
-      elseif precision == :double
-        global cutest_lib_double = cutest_lib
-      else  # precision = :quadruple
-        global cutest_lib_quadruple = cutest_lib
-      end
+      libsif = Libdl.dlopen(libsif_name, Libdl.RTLD_NOW | Libdl.RTLD_DEEPBIND | Libdl.RTLD_GLOBAL)
     end
   end
+  return libsif
 end
 
 function delete_temp_files(suffix::String)
