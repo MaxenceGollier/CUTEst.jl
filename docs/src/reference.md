@@ -1,17 +1,12 @@
 # Reference
 
-## Contents
-
-```@contents
-Pages = ["reference.md"]
-```
-
 ## Index
 
 ```@index
-Pages = ["reference.md"]
 ```
 
-```@autodocs
-Modules = [CUTEst]
+```@docs
+CUTEst.cons_coord
+CUTEst.cons_coord!
+CUTEst.consjac
 ```

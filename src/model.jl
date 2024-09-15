@@ -18,67 +18,58 @@ mutable struct CUTEstModel{T} <: AbstractNLPModel{T, Vector{T}}
   Jval::Vector{T}
   Jvar::Vector{Cint}
 
+  libsif::Ptr{Cvoid}
   funit::Ref{Cint}
+  index::Ref{Cint}
+  nvar::Ref{Cint}
+  ncon::Ref{Cint}
+  nnzj::Ref{Cint}
+  nnzh::Ref{Cint}
+  f::Ref{T}
+  status::Ref{Cint}
 end
 
 """
-    nlp = CUTEstModel{T}(name, args...; kwargs...)
-    nlp = CUTEstModel(name, args...; kwargs...)
+    CUTEstModel{T}(name, args...; kwargs...)
+    CUTEstModel(name, args...; precision::Symbol=:double, decode::Bool=true,
+                verbose::Bool=false, efirst::Bool=true, lfirst::Bool=true, lvfirst::Bool=true)
 
-Creates a CUTEst model following the NLPModels API.
-This model needs to be finalized before a new one is created (e.g., calling `finalize(nlp)`).
+Creates a `CUTEstModel` following the API of `NLPModels.jl`.
+This model must be finalized before creating a new one with the same `name` and precision `T`.
+Finalize the current model by calling `finalize(nlp)` to avoid conflicts.
 
-## Optional arguments
+## Arguments
 
-Any extra arguments will be passed to `sifdecoder`.
-You can, for instance, change parameters of the model:
-
-```jldoctest
-using CUTEst
-
-nlp = CUTEstModel("CHAIN", "-param", "NH=50")
-println(nlp.meta.nnzh)
-finalize(nlp)
-nlp = CUTEstModel("CHAIN", "-param", "NH=100")
-println(nlp.meta.nnzh)
-finalize(nlp)
-
-# output
-
-153
-303
-```
+- `name::AbstractString`: The name of the SIF problem to load.
+- `args...`: Additional arguments passed directly to `sifdecoder`. These can be used to change parameters of the model.
 
 ## Keyword arguments
 
-- `precision::Symbol = :double` : Precision of the CUTEstModel.
-- `decode::Bool = true`: Whether to call sifdecoder.
-- `verbose::Bool = false`: Passed to sifdecoder.
-- `efirst`::Bool = true`: Equalities first?
-- `lfirst`::Bool = true`: Linear (or affine) constraints first?
-- `lvfirst::Bool = true`: Nonlinear variables should appear first?
+- `precision::Symbol`: Specifies the precision of the `CUTEstModel`. Options are `:single`, `:double` (default), or `:quadruple`. This keyword argument is not supported when using a constructor with a data type `T`.
+- `decode::Bool`: Whether to call `sifdecoder`. Defaults to `true`.
+- `verbose::Bool`: If `true`, enables verbose output during the decoding process. Passed to `sifdecoder`.
+- `efirst::Bool`: If `true`, places equality constraints first.
+- `lfirst::Bool`: If `true`, places linear (or affine) constraints first.
+- `lvfirst::Bool`: If `true`, places nonlinear variables first.
 
-The keyword `precision` is not supported when a constructor with a data type `T` is used.
-The type `T` can be `Float32`, `Float64`, or `Float128`.
+!!! warning
+    The second constructor based on the keyword argument `precision` is type-unstable.
+
+```julia
+using CUTEst
+
+# Create a CUTEstModel with the name "CHAIN" and a parameter adjustment
+nlp = CUTEstModel{Float64}("CHAIN", "-param", "NH=50")
+display(nlp)
+finalize(nlp)  # Finalize the current model
+
+# Create another CUTEstModel with different parameters
+nlp = CUTEstModel{Float64}("CHAIN", "-param", "NH=100")
+display(nlp)
+finalize(nlp)  # Finalize the new model
+```
 """
 function CUTEstModel end
-
-for (T, prec) in ((:Float32, "single"), (:Float64, "double"), (:Float128, "quadruple"))
-  @eval begin
-    function CUTEstModel{$T}(
-      name::AbstractString,
-      args...;
-      decode::Bool = true,
-      verbose::Bool = false,
-      efirst::Bool = true,
-      lfirst::Bool = true,
-      lvfirst::Bool = true,
-    )
-      precision = Symbol($prec)
-      CUTEstModel(name, args...; precision, decode, verbose, efirst, lfirst, lvfirst)
-    end
-  end
-end
 
 function CUTEstModel(
   name::AbstractString,
@@ -90,6 +81,27 @@ function CUTEstModel(
   lfirst::Bool = true,
   lvfirst::Bool = true,
 )
+  if precision == :single
+    T = Float32
+  elseif precision == :double
+    T = Float64
+  elseif precision == :quadruple
+    T = Float128
+  else
+    error("The $precision precision is not supported.")
+  end
+  return CUTEstModel{T}(name, args...; decode, verbose, efirst, lfirst, lvfirst)
+end
+
+function CUTEstModel{T}(
+  name::AbstractString,
+  args...;
+  decode::Bool = true,
+  verbose::Bool = false,
+  efirst::Bool = true,
+  lfirst::Bool = true,
+  lvfirst::Bool = true,
+) where {T <: Union{Float32, Float64, Float128}}
   sifname = (length(name) < 4 || name[(end - 3):end] != ".SIF") ? "$name.SIF" : name
   if isfile(sifname)
     # This file is local so make sure the full path is maintained for sifdecoder
@@ -101,56 +113,33 @@ function CUTEstModel(
     end
   end
 
-  if precision == :single
-    T = Float32
-    funit = Ref{Cint}(41)
-    global cutest_instances_single
-    cutest_instances_single > 0 && error("CUTEst: call finalize on current model first")
-  elseif precision == :double
-    T = Float64
-    funit = Ref{Cint}(42)
-    global cutest_instances_double
-    cutest_instances_double > 0 && error("CUTEst: call finalize on current model first")
-  elseif precision == :quadruple
-    T = Float128
-    funit = Ref{Cint}(43)
-    global cutest_instances_quadruple
-    cutest_instances_quadruple > 0 && error("CUTEst: call finalize on current model first")
-  else
-    error("The $precision precision is not supported.")
-  end
-
+  precision = (T == Float32) ? :single : (T == Float64) ? :double : :quadruple
   pname, sif = basename(name) |> splitext
   outsdif = "OUTSDIF_$(pname)_$precision.d"
+  libsif = C_NULL
 
-  cd(cutest_problems_path) do
+  funit = rand(1000:10000) |> Ref{Cint}
+  status = Ref{Cint}(0)
+
+  cd(libsif_path) do
+    libsif_name = "lib$(pname)_$(precision)"
     if !decode
       isfile(outsdif) || error("CUTEst: no decoded problem found")
-      libsif = "lib$(pname)_$(precision)"
-      isfile("$libsif.$dlext") || error("CUTEst: lib not found; decode problem first")
-      cutest_lib = Libdl.dlopen(libsif, Libdl.RTLD_NOW | Libdl.RTLD_DEEPBIND | Libdl.RTLD_GLOBAL)
-      if precision == :single
-        global cutest_lib_single = cutest_lib
-      elseif precision == :double
-        global cutest_lib_double = cutest_lib
-      else  # precision = :quadruple
-        global cutest_lib_quadruple = cutest_lib
-      end
+      isfile("$(libsif_name).$dlext") || error("CUTEst: lib not found; decode problem first")
     else
       sifdecoder(path_sifname, args..., verbose = verbose, outsdif = outsdif, precision = precision)
       build_libsif(path_sifname, precision = precision)
     end
-    status = Ref{Cint}(0)
-    fopen(T, funit, outsdif, status)
+    libsif = Libdl.dlopen(libsif_name, Libdl.RTLD_NOW | Libdl.RTLD_DEEPBIND | Libdl.RTLD_GLOBAL)
+    fopen(T, libsif, funit, outsdif, status)
     cutest_error(status[])
   end
 
   # Obtain problem size.
-  status = Ref{Cint}(0)
   nvar = Ref{Cint}(0)
   ncon = Ref{Cint}(0)
 
-  cdimen(T, status, funit, nvar, ncon)
+  cdimen(T, libsif, status, funit, nvar, ncon)
   cutest_error(status[])
 
   x = Vector{T}(undef, nvar[])
@@ -169,6 +158,7 @@ function CUTEstModel(
     # Equality constraints first, linear constraints first, nonlinear variables first.
     csetup(
       T,
+      libsif,
       status,
       funit,
       Ref{Cint}(0),
@@ -188,7 +178,7 @@ function CUTEstModel(
       v_order,
     )
   else
-    usetup(T, status, funit, Ref{Cint}(0), Ref{Cint}(6), nvar, x, bl, bu)
+    usetup(T, libsif, status, funit, Ref{Cint}(0), Ref{Cint}(6), nvar, x, bl, bu)
   end
   cutest_error(status[])
 
@@ -204,11 +194,11 @@ function CUTEstModel(
   nnzj = Ref{Cint}(0)
 
   if ncon[] > 0
-    cdimsh(T, status, nnzh)
-    cdimsj(T, status, nnzj)
+    cdimsh(T, libsif, status, nnzh)
+    cdimsj(T, libsif, status, nnzj)
     nnzj[] -= nvar[]  # nnzj also counts the nonzeros in the objective gradient.
   else
-    udimsh(T, status, nnzh)
+    udimsh(T, libsif, status, nnzh)
   end
   cutest_error(status[])
 
@@ -217,9 +207,9 @@ function CUTEstModel(
   hcols = Vector{Cint}(undef, nnzh[])
   this_nnzh = Ref{Cint}(0)
   if ncon[] > 0
-    cshp(T, status, nvar, this_nnzh, nnzh, hcols, hrows)
+    cshp(T, libsif, status, nvar, this_nnzh, nnzh, hcols, hrows)
   else
-    ushp(T, status, nvar, this_nnzh, nnzh, hcols, hrows)
+    ushp(T, libsif, status, nvar, this_nnzh, nnzh, hcols, hrows)
   end
   cutest_error(status[])
 
@@ -227,7 +217,7 @@ function CUTEstModel(
   jrows = Vector{Cint}(undef, nnzj[])
   jcols = Vector{Cint}(undef, nnzj[])
   this_nnzj = Ref{Cint}(0)
-  csjp(T, status, this_nnzj, nnzj, jcols, jrows)
+  csjp(T, libsif, status, this_nnzj, nnzj, jcols, jrows)
   cutest_error(status[])
 
   # compute lin_nnzj and nln_nnzj
@@ -254,6 +244,7 @@ function CUTEstModel(
     x0 .= zero(T)
     ccifsg(
       T,
+      libsif,
       Ref{Cint}(0),
       nvar,
       Ref{Cint}(j),
@@ -284,7 +275,7 @@ function CUTEstModel(
   workspace_nvar = Vector{T}(undef, nvar)
   workspace_ncon = Vector{T}(undef, ncon)
 
-  fclose(T, funit, status)
+  fclose(T, libsif, funit, status)
   cutest_error(status[])
 
   meta = NLPModelMeta(
@@ -319,54 +310,31 @@ function CUTEstModel(
     workspace_ncon,
     Jval,
     Jvar,
+    libsif,
     funit,
+    Ref{Cint}(),
+    Ref{Cint}(nvar),
+    Ref{Cint}(ncon),
+    Ref{Cint}(nnzj),
+    Ref{Cint}(nnzh),
+    Ref{T}(),
+    status,
   )
 
-  if precision == :single
-    cutest_instances_single += 1
-  elseif precision == :double
-    cutest_instances_double += 1
-  else  # precision = :quadruple
-    cutest_instances_quadruple += 1
-  end
   finalizer(cutest_finalize, nlp)
-
   return nlp
 end
 
 function cutest_finalize(nlp::CUTEstModel{T}) where {T}
-  if T == Float32
-    global cutest_instances_single
-    cutest_instances_single == 0 && return
-  elseif T == Float64
-    global cutest_instances_double
-    cutest_instances_double == 0 && return
-  else  # precision = :quadruple
-    global cutest_instances_quadruple
-    cutest_instances_quadruple == 0 && return
-  end
-  status = Ref{Cint}(0)
-  if nlp.meta.ncon > 0
-    cterminate(T, status)
-  else
-    uterminate(T, status)
-  end
-  cutest_error(status[])
-  if T == Float32
-    global cutest_lib_single
-    Libdl.dlclose(cutest_lib_single)
-    cutest_instances_single -= 1
-    cutest_lib_single = C_NULL
-  elseif T == Float64
-    global cutest_lib_double
-    Libdl.dlclose(cutest_lib_double)
-    cutest_instances_double -= 1
-    cutest_lib_double = C_NULL
-  else  # precision = :quadruple
-    global cutest_lib_quadruple
-    Libdl.dlclose(cutest_lib_quadruple)
-    cutest_instances_quadruple -= 1
-    cutest_lib_quadruple = C_NULL
+  if nlp.libsif != C_NULL
+    status = Ref{Cint}(0)
+    if nlp.meta.ncon > 0
+      cterminate(T, nlp.libsif, status)
+    else
+      uterminate(T, nlp.libsif, status)
+    end
+    Libdl.dlclose(nlp.libsif)
+    nlp.libsif = C_NULL
   end
   return
 end

@@ -7,20 +7,27 @@ using Pkg.Artifacts
 using Libdl
 using Quadmath
 using NLPModels
+using JSON
+
 import Libdl.dlsym
+import REPL.TerminalMenus
+import Base.format_bytes
+import Printf.@sprintf
+import DataStructures: OrderedDict
 
-# Only one problem can be interfaced at any given time.
-global cutest_instances_single = 0
-global cutest_instances_double = 0
-global cutest_instances_quadruple = 0
-global cutest_lib_single = C_NULL
-global cutest_lib_double = C_NULL
-global cutest_lib_quadruple = C_NULL
+export CUTEstModel,
+  sifdecoder,
+  build_libsif,
+  set_mastsif,
+  clear_libsif,
+  manage_libsif,
+  list_sif_problems,
+  select_sif_problems
 
-export CUTEstModel, sifdecoder, build_libsif, set_mastsif
-
-const cutest_problems_path = joinpath(dirname(@__FILE__), "..", "deps", "files")
-isdir(cutest_problems_path) || mkpath(cutest_problems_path)
+const cutest_false = Ref{Bool}(false)
+const cutest_true = Ref{Bool}(true)
+const libsif_path = joinpath(@__DIR__, "..", "deps", "files") |> normpath
+isdir(libsif_path) || mkpath(libsif_path)
 
 function __init__()
   if !Sys.iswindows()
@@ -34,12 +41,12 @@ function __init__()
   if !haskey(ENV, "MASTSIF")
     set_mastsif()
   else
-    @info "call set_mastsif() to use the full SIF collection"
+    @info "Using local problem directory: $(ENV["MASTSIF"])"
+    @info "Call set_mastsif() if you want to use the full SIF collection."
   end
-  @info "using problem repository" ENV["MASTSIF"]
 
-  global libpath = joinpath(CUTEst_jll.artifact_dir, "lib")
-  push!(Libdl.DL_LOAD_PATH, cutest_problems_path)
+  global libcutest_path = joinpath(CUTEst_jll.artifact_dir, "lib")
+  push!(Libdl.DL_LOAD_PATH, libsif_path)
 end
 
 # to allow view inputs with stride one

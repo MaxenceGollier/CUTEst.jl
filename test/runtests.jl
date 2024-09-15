@@ -9,10 +9,11 @@ set_mastsif()
 @test ispath(ENV["MASTSIF"])
 @test isfile(joinpath(ENV["MASTSIF"], "CYCLOOCT.SIF"))
 problems = ["BROWNDEN", "HS5", "HS6", "HS10", "HS11", "HS13", "HS14"]
+dict_precision = Dict(Float32 => :single, Float64 => :double, Float128 => :quadruple)
 
 # test sifdecoder
 for pb in problems
-  println("--- $pb ---")
+  println("--- sifdecoder -- $pb ---")
   for precision in (:single, :double, :quadruple)
     print("$precision ")
     sifdecoder(pb, precision = precision)
@@ -21,15 +22,37 @@ for pb in problems
   println()
 end
 
+# test build_libsif
+for pb in problems
+  println("--- build_libsif -- $pb ---")
+  for precision in (:single, :double, :quadruple)
+    print("$precision ")
+    build_libsif(pb, precision = precision)
+    println("✓")
+  end
+  println()
+end
+
+if Sys.iswindows() || VERSION ≥ v"1.10"
+  for precision in (:single, :double, :quadruple)
+    @testset "Multiple instances of CUTEstModel -- $precision precision" begin
+      nlps = [CUTEstModel(problem, precision = precision) for problem in problems]
+      for nlp in nlps
+        finalize(nlp)
+      end
+    end
+  end
+end
+
 include("test_core.jl")
 include("test_julia.jl")
 include("coverage.jl")
 include("multiple_precision.jl")
 
 for problem in problems
-  for (T, precision) in [(Float32, :single), (Float64, :double), (Float128, :quadruple)]
-    println("Testing interfaces on problem $problem in $precision precision")
-    nlp = CUTEstModel(problem, precision = precision)
+  for T in (Float32, Float64, Float128)
+    println("Testing interfaces on problem $problem in $(dict_precision[T]) precision")
+    nlp = CUTEstModel{T}(problem)
     nlp_man = eval(Symbol(problem))(T)
 
     test_nlpinterface(nlp, nlp_man)
@@ -43,29 +66,26 @@ for problem in problems
 end
 
 include("nlpmodelstest.jl")
-# include("test_select.jl") # Tests are removed because any update to MASTSIF breaks it
+# include("test_select.jl")
 
 problems = CUTEst.select(max_var = 2, max_con = 2)
 problems = randsubseq(problems, 0.1)
 
 for p in problems
-  for (T, precision) in [(Float32, :single), (Float64, :double), (Float128, :quadruple)]
-    nlp = CUTEstModel(p, precision = precision)
+  for T in (Float32, Float64, Float128)
+    nlp = CUTEstModel{T}(p)
     x0 = nlp.meta.x0
     nvar, ncon = nlp.meta.nvar, nlp.meta.ncon
-
     println("$p: julia interface: f(x₀) = $(obj(nlp, x0))")
 
-    status = Cint[0]
-    fval = T[0.0]
+    fval = Ref{T}()
     if ncon > 0
       cx = zeros(T, ncon)
-      CUTEst.cfn(T, status, Cint[nvar], Cint[ncon], x0, fval, cx)
+      CUTEst.cfn(T, nlp.libsif, nlp.status, nlp.nvar, nlp.ncon, x0, fval, cx)
     else
-      CUTEst.ufn(T, status, Cint[nvar], x0, fval)
+      CUTEst.ufn(T, nlp.libsif, nlp.status, nlp.nvar, x0, fval)
     end
-    println("$p: core interface: f(x₀) = $(fval[1])")
-
+    println("$p: core interface: f(x₀) = $(fval[])")
     finalize(nlp)
   end
 end
@@ -81,22 +101,27 @@ finalize(nlp)
 
 @testset "Test decoding separately (issue #239)" begin
   problems = ["AKIVA", "ROSENBR", "ZANGWIL2"]
-  for (T, precision) in [(Float32, :single), (Float64, :double), (Float128, :quadruple)]
+  for T in (Float32, Float64, Float128)
     # Decoding
     for p in problems
-      nlp = CUTEstModel(p, precision = precision)
+      nlp = CUTEstModel{T}(p)
       finalize(nlp)
     end
     # No decode
     for p in problems
-      nlp = CUTEstModel(p, precision = precision, decode = false)
+      nlp = CUTEstModel{T}(p, decode = false)
       @test nlp.meta.nvar == 2
       finalize(nlp)
     end
   end
 end
 
-# test set_mastsif
-for set in ("sifcollection", "maros-meszaros", "netlib-lp")
-  set_mastsif(set)
+@testset "set_mastsif / list_sif_problems" begin
+  for (set, nsif) in [("sifcollection", 1539), ("maros-meszaros", 138), ("netlib-lp", 114)]
+    set_mastsif(set)
+    sif_problems = list_sif_problems()
+    @test length(sif_problems) == nsif
+  end
 end
+
+clear_libsif()

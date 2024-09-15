@@ -3,19 +3,31 @@
 This package provides an interface to CUTEst, a repository of
 constrained and unconstrained nonlinear programming problems for testing and
 comparing optimization algorithms, derived from the abstract model on
-[NLPModels](https://github.com/JuliaSmoothOptimizers/NLPModels.jl).
+[NLPModels.jl](https://github.com/JuliaSmoothOptimizers/NLPModels.jl).
 
-### Stable release [![Github release](https://img.shields.io/github/release/JuliaSmoothOptimizers/CUTEst.jl.svg)](https://github.com/JuliaSmoothOptimizers/CUTEst.jl/releases/latest) [![DOI](https://zenodo.org/badge/30661559.svg)](https://zenodo.org/badge/latestdoi/30661559)
+### Stable release [![Github release](https://img.shields.io/github/release/JuliaSmoothOptimizers/CUTEst.jl.svg)](https://github.com/JuliaSmoothOptimizers/CUTEst.jl/releases/latest) [![DOI][doi-img]][doi-url]
 
-- Documentation: [![Documentation](https://img.shields.io/badge/docs-stable-blue.svg)](https://jso.dev/CUTEst.jl/stable)
+- Documentation: [![docs-stable][docs-stable-img]][docs-stable-url]
 - Chat: [![Gitter](https://img.shields.io/gitter/room/JuliaSmoothOptimizers/JuliaSmoothOptimizers.svg)](https://gitter.im/JuliaSmoothOptimizers/JuliaSmoothOptimizers)
 
 ### Development version
 
-- Documentation: [![Documentation](https://img.shields.io/badge/docs-latest-blue.svg)](https://jso.dev/CUTEst.jl/latest)
-- Tests:
-[![Build Status](https://travis-ci.org/JuliaSmoothOptimizers/CUTEst.jl.svg?branch=main)](https://travis-ci.org/JuliaSmoothOptimizers/CUTEst.jl)
-[![Coverage Status](https://coveralls.io/repos/JuliaSmoothOptimizers/CUTEst.jl/badge.svg?branch=main)](https://coveralls.io/r/JuliaSmoothOptimizers/CUTEst.jl?branch=main)
+- Documentation: [![docs-dev][docs-dev-img]][docs-dev-url]
+- Tests: [![build-gh][build-gh-img]][build-gh-url] [![codecov][codecov-img]][codecov-url]
+- Downloads: [![downloads][downloads-img]][downloads-url]
+
+[docs-stable-img]: https://img.shields.io/badge/docs-stable-blue.svg
+[docs-stable-url]: https://JuliaSmoothOptimizers.github.io/CUTEst.jl/stable
+[docs-dev-img]: https://img.shields.io/badge/docs-dev-purple.svg
+[docs-dev-url]: https://JuliaSmoothOptimizers.github.io/CUTEst.jl/dev
+[build-gh-img]: https://github.com/JuliaSmoothOptimizers/CUTEst.jl/workflows/CI/badge.svg?branch=main
+[build-gh-url]: https://github.com/JuliaSmoothOptimizers/CUTEst.jl/actions
+[codecov-img]: https://codecov.io/gh/JuliaSmoothOptimizers/CUTEst.jl/branch/main/graph/badge.svg
+[codecov-url]: https://app.codecov.io/gh/JuliaSmoothOptimizers/CUTEst.jl
+[doi-img]: https://zenodo.org/badge/30661559.svg
+[doi-url]: https://zenodo.org/badge/latestdoi/30661559
+[downloads-img]: https://img.shields.io/badge/dynamic/json?url=http%3A%2F%2Fjuliapkgstats.com%2Fapi%2Fv1%2Fmonthly_downloads%2FCUTEst&query=total_requests&suffix=%2Fmonth&label=Downloads
+[downloads-url]: https://juliapkgstats.com/pkg/CUTEst
 
 ## How to Cite
 
@@ -24,7 +36,9 @@ If you use CUTEst.jl in your work, please cite using the format given in [CITATI
 ## Installing
 
 This package will automatically install the CUTEst binaries for your platform.
-The `gfortran` compiler is required to compile decoded SIF problems, except on Windows.
+The `gfortran` compiler is required to compile decoded SIF problems.
+Users on all platforms except Windows must install it to use `CUTEst.jl`.
+For Windows users, a small artifact containing `gfortran.exe` is installed automatically.
 No other Fortran compiler is supported.
 
 The following command installs the CUTEst binaries and the Julia interface:
@@ -35,9 +49,8 @@ pkg> add CUTEst
 
 ## Usage
 
-After installation, you can create instances of
-[NLPModels](https://github.com/JuliaSmoothOptimizers/NLPModels.jl) models using
-the `CUTEstModel` constructor:
+After installation, you can create instances of [NLPModels](https://github.com/JuliaSmoothOptimizers/NLPModels.jl)
+models using the `CUTEstModel` constructor:
 
 ```julia
 using CUTEst
@@ -67,49 +80,25 @@ nlp_single = CUTEstModel{Float32}("BYRDSPHR")
 nlp_quadruple = CUTEstModel{Float128}("BYRDSPHR")
 ```
 
-## SIF problems
-
-A large collection of SIF files can be found [here](https://bitbucket.org/optrove/workspace/repositories/).
-If the environment variable `MASTSIF` is not set, `CUTEst.jl` will automatically download the CUTEst
-NLP test set the first time you use `using CUTEst`.
-Thanks to the function `set_mastsif`, you can easily switch to the Maros-Meszaros QP test set
-or the Netlib LP test set.
+To retrieve the list of available SIF problems, use the function `list_sif_problems`:
 
 ```julia
-set_mastsif("sifcollection")  # default set
-set_mastsif("maros-meszaros")
-set_mastsif("netlib-lp")
+using CUTEst
+
+available_problems = list_sif_problems()
 ```
 
-The constructor `CUTEstModel{Float64}(name)` will try to find the SIF file associated with the problem `name` in the current set.
-
-### Run multiple models in parallel
-
-First, decode each of the problems in serial.
+If you want to retrieve only problems with specific properties, you can use the function `select_sif_problems`:
 
 ```julia
-function decodemodel(name)
-    finalize(CUTEstModel(name))
-end
+using CUTEst
 
-probs = ["AKIVA", "ALLINITU", "ARGLINA", "ARGLINB", "ARGLINC", "ARGTRIGLS", "ARWHEAD"]
-broadcast(decodemodel, probs)
+filtered_problems = select_sif_problems(; min_var=10, max_var=100, only_linear_con=true)
 ```
 
-Then, call functions handling models in parallel. It is important to pass `decode=false` to `CUTEstModel`.
+## Tutorial
 
-```julia
-addprocs(2)
-@everywhere using CUTEst
-@everywhere function evalmodel(name)
-   nlp = CUTEstModel(name; decode=false)
-   retval = obj(nlp, nlp.meta.x0)
-   finalize(nlp)
-   retval
-end
-
-fvals = pmap(evalmodel, probs)
-```
+You can check an [Introduction to CUTEst.jl](https://jso.dev/tutorials/introduction-to-cutest/) on our [site](https://jso.dev/).
 
 ## Related Packages
 
